@@ -159,10 +159,23 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     return c;
   });
 
-  return res.send({
+  // Acknowledge interaction immediately
+  res.send({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE });
+
+  // Then patch the message directly using the bot token
+  const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
+
+  await DiscordRequest(endpoint, {
+    method: 'PATCH',
+    body: {
+      components: components,
+    },
+  });
+
+  /*return res.send({
     type: InteractionResponseType.UPDATE_MESSAGE,
     data: { components }
-  });
+  });*/
 }
 
     if (componentId.startsWith('accept_button_')) {
