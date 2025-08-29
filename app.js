@@ -162,11 +162,15 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   // Acknowledge interaction immediately
   res.send({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE });
 
-  // Then patch the message directly using the bot token
-  const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
+  // Patch the message using the bot token (long-lived)
+  const endpoint = `channels/${req.body.channel_id}/messages/${req.body.message.id}`;
 
   await DiscordRequest(endpoint, {
     method: 'PATCH',
+    headers: {
+      Authorization: `Bot ${process.env.DISCORD_TOKEN}`, // use your bot token
+      'Content-Type': 'application/json',
+    },
     body: {
       components: components,
     },
