@@ -9,7 +9,7 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import { getRandomEmoji, DiscordRequest } from './utils.js';
-import { getShuffledOptions, getResult, getAppIdFromUrl, getSteamHeaderImage } from './game.js';
+import { getShuffledOptions, getResult, getSteamAppIdFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
 
 // Create an express app
 const app = express();
@@ -44,10 +44,41 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     if (name === 'lfg' && id) {
       // Interaction context
       const context = req.body.context;
-      const url = req.body.data.options.find(o => o.name === 'url').value;
+      const url = req.body.data.options.find(o => o.name === 'game_url').value;
+      const imageOption = req.body.data.options.find(o => o.name === 'image_url');
+      const image_url = imageOption?.value || null; // null or fallback URL
       const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-      const appId = getAppIdFromUrl(url);
-      const imageUrl = await getSteamHeaderImage(appId);
+
+      // Check if URL is a Steam link
+      const isSteamUrl = url?.startsWith('https://store.steampowered.com/') 
+                || url?.startsWith('https://steamcommunity.com/app/');
+
+      const isYoutubeUrl = url?.startsWith('https://www.youtube.com')
+
+      var appId = null;
+      var imageUrl = null;
+      if (isSteamUrl)
+      {
+        appId = getSteamAppIdFromUrl(url);
+        imageUrl = await getSteamHeaderImage(appId);
+      }
+      else if (isYoutubeUrl)
+      {
+        appId = extractYouTubeId(url);
+        imageUrl = getYouTubeThumbnail(appId);
+      }
+      else
+      {
+        imageUrl = image_url;
+      }
+
+      if (!isSteamUrl && !isYoutubeUrl && imageUrl === null)
+      {
+          return res.send({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: '❌ If the game is not from steam or youtube you must provide an image by adding the image_url argument in the command.' }
+          });
+      }
 
       // initialize vote store
       activeGames[id] = 

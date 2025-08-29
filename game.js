@@ -27,9 +27,19 @@ export function getResult(p1, p2) {
   return formatResult(gameResult);
 }
 
-export function getAppIdFromUrl(url) {
+export function getSteamAppIdFromUrl(url) {
   const match = url.match(/\/app\/(\d+)\//);
   return match ? match[1] : null;
+}
+
+export function extractYouTubeId(url) {
+  const regex = /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([^\s&]+)/;
+  const match = url.match(regex);
+  return match ? match[1] : null;
+}
+
+export function getYouTubeThumbnail(videoId, quality = 'maxresdefault') {
+  return `https://img.youtube.com/vi/${videoId}/${quality}.jpg`;
 }
 
 export async function getSteamHeaderImage(appId) {

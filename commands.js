@@ -26,10 +26,16 @@ const LFG_COMMAND = {
   contexts: [0, 1, 2],
   options: [
     {
-      name: 'url',
-      description: 'The link to share',
+      name: 'game_url',
+      description: 'The url of the game to share',
       type: 3, // STRING
       required: true,
+    },
+    {
+      name: 'image_url',
+      description: 'The url of the image to display',
+      type: 3, // STRING
+      required: false,
     },
   ],
 };
