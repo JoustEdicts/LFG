@@ -37,8 +37,22 @@ const LFG_COMMAND = {
       type: 3, // STRING
       required: false,
     },
+    {
+      name: 'game_name',
+      description: 'The name of the game to share',
+      type: 3, // STRING
+      required: false,
+    },
   ],
 };
 
-const ALL_COMMANDS = [LFG_COMMAND];
+const LIST_TOP_COMMAND = {
+  name: 'list',
+  description: 'List all game suggestions.',
+  type: 1, // CHAT_INPUT
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
+const ALL_COMMANDS = [LFG_COMMAND, LIST_TOP_COMMAND];
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);

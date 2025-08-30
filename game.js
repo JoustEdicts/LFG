@@ -32,6 +32,11 @@ export function getSteamAppIdFromUrl(url) {
   return match ? match[1] : null;
 }
 
+export function getSteamAppNameFromUrl(url) {
+  const match = url.match(/\/app\/\d+\/([^/]+)/);
+  return match ? match[1].replace(/_/g, " ") : null;
+}
+
 export function extractYouTubeId(url) {
   const regex = /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([^\s&]+)/;
   const match = url.match(regex);

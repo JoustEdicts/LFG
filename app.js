@@ -9,7 +9,8 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import { getRandomEmoji, DiscordRequest } from './utils.js';
-import { getShuffledOptions, getResult, getSteamAppIdFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
+import { getShuffledOptions, getResult, getSteamAppIdFromUrl, getSteamAppNameFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
+import { registerPlayer, addGame, getGameTitle, voteForGame, getGameVoteCount, getGameVotes, createSession, getAllSessions, addPlayerToSession, getPlayersInSession, getGameIdFromPostId} from './db.js';
 
 // Create an express app
 const app = express();
@@ -41,108 +42,146 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
 
-    if (name === 'lfg' && id) {
-      // Interaction context
-      const context = req.body.context;
-      const url = req.body.data.options.find(o => o.name === 'game_url').value;
-      const imageOption = req.body.data.options.find(o => o.name === 'image_url');
-      const image_url = imageOption?.value || null; // null or fallback URL
-      const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
+  if (name == 'list') {
+    // TODO : list all games with their votes
 
-      // Check if URL is a Steam link
-      const isSteamUrl = url?.startsWith('https://store.steampowered.com/') 
-                || url?.startsWith('https://steamcommunity.com/app/');
+    // Step 1 : Add a getAllGames in db.js, and obviously call it here
 
-      const isYoutubeUrl = url?.startsWith('https://www.youtube.com')
+    // Step 2 : call getAllVotes for each game... or make a getAllGamesWithVotes in db.js
 
-      var appId = null;
-      var imageUrl = null;
-      if (isSteamUrl)
-      {
-        appId = getSteamAppIdFromUrl(url);
-        imageUrl = await getSteamHeaderImage(appId);
-      }
-      else if (isYoutubeUrl)
-      {
-        appId = extractYouTubeId(url);
-        imageUrl = getYouTubeThumbnail(appId);
-      }
-      else
-      {
-        imageUrl = image_url;
-      }
+    // Step 3 : display it in a discord message or modal (investigate !)
+  }
 
-      if (!isSteamUrl && !isYoutubeUrl && imageUrl === null)
-      {
-          return res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '❌ If the game is not from steam or youtube you must provide an image by adding the image_url argument in the command.' }
-          });
-      }
+  if (name === 'lfg' && id) {
+    // Interaction context
+    const context = req.body.context;
+    const url = req.body.data.options.find(o => o.name === 'game_url').value;
+    const imageOption = req.body.data.options.find(o => o.name === 'image_url');
+    const image_url = imageOption?.value || null; // null or fallback URL
+    const gameNameOption = req.body.data.options.find(o => o.name === 'game_name');
+    const game_name = gameNameOption?.value || null; // null or fallback URL
+    const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
 
-      // initialize vote store
-      activeGames[id] = 
-      { 
-        yes: new Set(), 
-        no: new Set() 
-      };
+    // Check if URL is a Steam link
+    const isSteamUrl = url?.startsWith('https://store.steampowered.com/') 
+              || url?.startsWith('https://steamcommunity.com/app/');
 
-      try
-      {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-            components: [
-              {
-                type: MessageComponentTypes.TEXT_DISPLAY,
-                content: `@here, seems like <@${userId}> wants you to check a game out ! ${url}`,
-              },
-              {
-                type: MessageComponentTypes.MEDIA_GALLERY,
-                items: [
-                  {
-                    media:
-                    {
-                      url: imageUrl
-                    },
-                  }
-                ],
-              },
-              {
-                type: MessageComponentTypes.TEXT_DISPLAY,
-                content: '✅ Interested: Nobody yet\n❌ Not Interested: Nobody yet',
-              },
-              {
-                type: MessageComponentTypes.ACTION_ROW,
-                components: [
-                  {
-                    type: MessageComponentTypes.BUTTON,
-                    custom_id: `vote_yes_${req.body.id}`,
-                    label: 'Interested 👍',
-                    style: ButtonStyleTypes.SUCCESS,
-                  },
-                  {
-                    type: MessageComponentTypes.BUTTON,
-                    custom_id: `vote_no_${req.body.id}`,
-                    label: 'Not Interested 👎',
-                    style: ButtonStyleTypes.DANGER,
-                  }
-                ],
-              },
-            ],
-          },
-        });
-      }
-      catch (err)
-      {
-        console.error(err);
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ Something went wrong!' }
-        });
-      }
+    const isYoutubeUrl = url?.startsWith('https://www.youtube.com')
+
+    var appId = null;
+    var imageUrl = null;
+    var gameName = null;
+
+    if (isSteamUrl)
+    {
+      appId = getSteamAppIdFromUrl(url);
+      imageUrl = await getSteamHeaderImage(appId);
+      gameName = getSteamAppNameFromUrl(url);
     }
+    else if (isYoutubeUrl)
+    {
+      appId = extractYouTubeId(url);
+      imageUrl = getYouTubeThumbnail(appId);
+      gameName = game_name;
+    }
+    else
+    {
+      imageUrl = image_url;
+      gameName = game_name;
+    }
+
+    if (gameName === null)
+    {
+      return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ If the game is not from steam you must provide a game name by adding the game_name argument in the command.' }
+        });
+    }
+
+    if (!isSteamUrl && !isYoutubeUrl && imageUrl === null)
+    {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ If the game is not from steam or youtube you must provide an image by adding the image_url argument in the command.' }
+        });
+    }
+
+    // Add the game in db if it doesn't already exist
+    if (getGameTitle(gameName) === null)
+    {
+      addGame(gameName, req.body.id, url);
+    }
+    else
+    {
+      return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ This game already exists !' }
+        });
+    }
+
+    // initialize vote store
+    activeGames[id] = 
+    { 
+      yes: new Set(), 
+      no: new Set() 
+    };
+
+    try
+    {
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          flags: InteractionResponseFlags.IS_COMPONENTS_V2,
+          components: [
+            {
+              type: MessageComponentTypes.TEXT_DISPLAY,
+              content: `@here, seems like <@${userId}> wants you to check a game out ! ${url}`,
+            },
+            {
+              type: MessageComponentTypes.MEDIA_GALLERY,
+              items: [
+                {
+                  media:
+                  {
+                    url: imageUrl
+                  },
+                }
+              ],
+            },
+            {
+              type: MessageComponentTypes.TEXT_DISPLAY,
+              content: '✅ Interested: Nobody yet\n❌ Not Interested: Nobody yet',
+            },
+            {
+              type: MessageComponentTypes.ACTION_ROW,
+              components: [
+                {
+                  type: MessageComponentTypes.BUTTON,
+                  custom_id: `vote_yes_${req.body.id}`,
+                  label: 'Interested 👍',
+                  style: ButtonStyleTypes.SUCCESS,
+                },
+                {
+                  type: MessageComponentTypes.BUTTON,
+                  custom_id: `vote_no_${req.body.id}`,
+                  label: 'Not Interested 👎',
+                  style: ButtonStyleTypes.DANGER,
+                }
+              ],
+            },
+          ],
+        },
+      });
+    }
+    catch (err)
+    {
+      console.error(err);
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: '❌ Something went wrong!' }
+      });
+    }
+  }
 
     console.error(`unknown command: ${name}`);
     return res.status(400).json({ error: 'unknown command' });
@@ -160,22 +199,38 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const postId = componentId.split('_').pop();
       const context = req.body.context;
       const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
+      const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
 
     if (!activeGames[postId]) {
       activeGames[postId] = { yes: new Set(), no: new Set() };
     }
 
+  const gameId = getGameIdFromPostId(postId);
+  registerPlayer(userId, userName);
+
   // remove from both
-  activeGames[postId].yes.delete(userId);
-  activeGames[postId].no.delete(userId);
+  activeGames[postId].yes = new Set();
+  activeGames[postId].no = new Set();
 
   // add to correct set
   if (componentId.startsWith('vote_yes_')) {
-    activeGames[postId].yes.add(userId);
+    voteForGame(userId, gameId, 1);
+    //activeGames[postId].yes.add(userId);
   } else {
-    activeGames[postId].no.add(userId);
+    voteForGame(userId, gameId, 0);
+    //activeGames[postId].no.add(userId);
   }
 
+  // Get votes from db
+  var allGameVotes = getGameVotes(gameId);
+
+  // Update activeGames from db result
+  for (const vote of allGameVotes) {
+    if (vote.vote === 0)
+      activeGames[postId].no.add(userId);
+    else
+      activeGames[postId].yes.add(userId);
+  }
   // Build result text (using mentions so people see who voted)
   const yesUsers = [...activeGames[postId].yes].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
   const noUsers = [...activeGames[postId].no].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
