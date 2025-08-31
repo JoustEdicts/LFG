@@ -8,9 +8,9 @@ import {
   ButtonStyleTypes,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import { getRandomEmoji, DiscordRequest } from './utils.js';
-import { getShuffledOptions, getResult, getSteamAppIdFromUrl, getSteamAppNameFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
-import { registerPlayer, addGame, getGameTitle, voteForGame, getGameVoteCount, getGameVotes, createSession, getAllSessions, addPlayerToSession, getPlayersInSession, getGameIdFromPostId} from './db.js';
+import { DiscordRequest } from './utils.js';
+import { getSteamAppIdFromUrl, getSteamAppNameFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
+import { getListedVotes, getUserIdFromPlayerId, getPostsFromGameId, addPost, getGameIdFromTitle, registerPlayer, addGame, getGameTitle, voteForGame, getGameVoteCount, getGameVotes, createSession, getAllSessions, addPlayerToSession, getPlayersInSession, getGameIdFromPostId} from './db.js';
 
 // Create an express app
 const app = express();
@@ -42,18 +42,190 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
 
-  if (name == 'list') {
-    // TODO : list all games with their votes
+  // TODO : add the "session" command to set up a game session on a specific game at a specific time
+  // It should ping players that notified their interest of the game via the /lfg command
+  // It should :
+  //  1) Create a channel for the session, accessible to everyone who voted with interest
+  //  2) Create a discord event and ping it to the channel
+  //  3) Create a message where players can click a button to RSVP
 
-    // Step 1 : Add a getAllGames in db.js, and obviously call it here
+  // TODO : see how to keep channels clean. 
+  // Should it be ephemeral ? Should creating the list
+  // be a one shot and then refer to the message on command call ?
+  // Should the list be paginated ?
+  if (name === 'list') {
+    const games = getListedVotes();
 
-    // Step 2 : call getAllVotes for each game... or make a getAllGamesWithVotes in db.js
+     if (!games.length) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: "📭 No games have been suggested yet." }
+      };
+    }
 
-    // Step 3 : display it in a discord message or modal (investigate !)
+    const embed = {
+      title: "Server Game Votes",
+      color: 0x5865F2,
+      fields: games.map((g, i) => ({
+        name: `${i + 1}. ${g.title}`,
+        value: `[🔗](${g.url})\t✅ ${g.interested_votes}\t❌ ${g.not_interested_votes}`,
+        inline: false, // false makes it full-width, true would put multiple side-by-side
+      })),
+    };
+
+    const components = games.map((g) => ({
+      type: 1, // Action Row
+      components: [
+        {
+          type: 2, // Button
+          custom_id: `details_${g.game_id}`,
+          label: "See Voters",
+          style: 1 // Primary
+        }
+      ]
+    }));
+
+    return res.send({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        embeds: [embed]  // <-- notice the array here
+      },
+    });
   }
 
   if (name === 'lfg' && id) {
-    // Interaction context
+    try
+    {
+      const { response, game_id } = await buildGameMessage(id, req, res);
+      res.send(response);
+
+      // Fetch the message the bot just created
+      const messageRes = await fetch(
+        `https://discord.com/api/v10/webhooks/${process.env.APP_ID}/${req.body.token}/messages/@original`
+      );
+      const messageData = await messageRes.json();
+
+      // messageData.id now contains the Discord message ID
+      addPost(game_id, messageData.id, messageData.channel_id);
+
+      return;
+    } 
+    catch (err) 
+    {
+      console.error(err);
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: '❌ Something went wrong!' }
+      });
+  }
+  }
+
+    console.error(`unknown command: ${name}`);
+    return res.status(400).json({ error: 'unknown command' });
+  }
+
+  /**
+   * Handle requests from interactive components
+   * See https://discord.com/developers/docs/components/using-message-components#using-message-components-with-interactions
+   */
+  if (type === InteractionType.MESSAGE_COMPONENT) {
+    // custom_id set in payload when sending message component
+    const componentId = data.custom_id;
+    const postId = req.body.message.id;
+
+    if (componentId.startsWith('vote_yes_') || componentId.startsWith('vote_no_')) {
+      const context = req.body.context;
+      const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
+      const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
+
+    const gameId = getGameIdFromPostId(postId);
+    registerPlayer(userId, userName);
+
+    // initialize vote store
+    var voteSet = 
+    { 
+      yes: new Set(), 
+      no: new Set() 
+    };
+
+    // add to correct set
+    if (componentId.startsWith('vote_yes_')) {
+      voteForGame(userId, gameId, 1);
+    } else {
+      voteForGame(userId, gameId, 0);
+    }
+
+    // Get votes from db
+    var allGameVotes = getGameVotes(gameId);
+
+    // Update activeGames from db result
+    for (const vote of allGameVotes) {
+      if (vote.vote === 0)
+        voteSet.no.add(getUserIdFromPlayerId(vote.player_id));
+      else
+        voteSet.yes.add(getUserIdFromPlayerId(vote.player_id));
+    }
+    // Build result text (using mentions so people see who voted)
+    const yesUsers = [...voteSet.yes].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
+    const noUsers = [...voteSet.no].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
+
+    const results = `✅ Interested: ${yesUsers}\n❌ Not Interested: ${noUsers}`;
+
+    const components = req.body.message.components.map((c, index) => {
+      if (c.type === MessageComponentTypes.TEXT_DISPLAY && index === 2) 
+      {
+        return { ...c, content: results };
+      }
+      return c;
+    });
+
+    // Acknowledge interaction immediately
+    res.send({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE });
+
+    const posts = getPostsFromGameId(gameId);
+    for (const post of posts) {
+      // Patch the message using the bot token (long-lived)
+      const endpoint = `channels/${post.channel_id}/messages/${post.post_id}`;
+
+      try
+      {
+        await DiscordRequest(endpoint, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bot ${process.env.DISCORD_TOKEN}`, // use your bot token
+            'Content-Type': 'application/json',
+          },
+          body: {
+            components: components,
+          },
+        });
+      }
+      catch (err)
+      {
+        // Too many edits
+        if (err.code === 30046) 
+        {
+            // Delete message and build anew
+            await buildGameMessage(postId, req, res);
+        }
+      }
+    }
+  }
+
+  return;
+}
+
+  console.error('unknown interaction type', type);
+  return res.status(400).json({ error: 'unknown interaction type' });
+});
+
+app.listen(PORT, () => {
+  console.log('Listening on port', PORT);
+});
+
+async function buildGameMessage(id, req)
+{
+  // Interaction context
     const context = req.body.context;
     const url = req.body.data.options.find(o => o.name === 'game_url').value;
     const imageOption = req.body.data.options.find(o => o.name === 'image_url');
@@ -71,6 +243,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     var appId = null;
     var imageUrl = null;
     var gameName = null;
+    var voteContent = '✅ Interested: Nobody yet\n❌ Not Interested: Nobody yet';
 
     if (isSteamUrl)
     {
@@ -92,278 +265,120 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
     if (gameName === null)
     {
-      return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ If the game is not from steam you must provide a game name by adding the game_name argument in the command.' }
-        });
+      return {
+          response: {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: '❌ If the game is not from steam you must provide a game name by adding the game_name argument in the command.' }
+          },
+          game_id: null
+        };
     }
 
     if (!isSteamUrl && !isYoutubeUrl && imageUrl === null)
     {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ If the game is not from steam or youtube you must provide an image by adding the image_url argument in the command.' }
-        });
-    }
-
-    // Add the game in db if it doesn't already exist
-    if (getGameTitle(gameName) === null)
-    {
-      addGame(gameName, req.body.id, url);
-    }
-    else
-    {
-      return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ This game already exists !' }
-        });
+        return {
+          response: {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: '❌ If the game is not from steam or youtube you must provide an image by adding the image_url argument in the command.' }
+          },
+          game_id: null
+        };
     }
 
     // initialize vote store
-    activeGames[id] = 
+    var voteSet = 
     { 
       yes: new Set(), 
       no: new Set() 
     };
 
+    var gameId = null;
+    // Add the game in db if it doesn't already exist
+    if (getGameTitle(gameName) === null)
+    {
+      addGame(gameName, url);
+      gameId = getGameIdFromTitle(gameName);
+    }
+    else
+    {
+      gameId = getGameIdFromTitle(gameName);
+      // This game already exists, populate activeGames (votes) accordingly
+      // Get votes from db
+      var allGameVotes = getGameVotes(gameId);
+
+      // Update activeGames from db result
+      for (const vote of allGameVotes) {
+        if (vote.vote === 0)
+          voteSet.no.add(userId);
+        else
+          voteSet.yes.add(userId);
+      }
+      // Build result text (using mentions so people see who voted)
+      const yesUsers = [...voteSet.yes].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
+      const noUsers = [...voteSet.no].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
+
+      voteContent = `✅ Interested: ${yesUsers}\n❌ Not Interested: ${noUsers}`;
+    }
+
     try
     {
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-          components: [
-            {
-              type: MessageComponentTypes.TEXT_DISPLAY,
-              content: `@here, seems like <@${userId}> wants you to check a game out ! ${url}`,
-            },
-            {
-              type: MessageComponentTypes.MEDIA_GALLERY,
-              items: [
-                {
-                  media:
-                  {
-                    url: imageUrl
-                  },
-                }
-              ],
-            },
-            {
-              type: MessageComponentTypes.TEXT_DISPLAY,
-              content: '✅ Interested: Nobody yet\n❌ Not Interested: Nobody yet',
-            },
-            {
-              type: MessageComponentTypes.ACTION_ROW,
-              components: [
-                {
-                  type: MessageComponentTypes.BUTTON,
-                  custom_id: `vote_yes_${req.body.id}`,
-                  label: 'Interested 👍',
-                  style: ButtonStyleTypes.SUCCESS,
-                },
-                {
-                  type: MessageComponentTypes.BUTTON,
-                  custom_id: `vote_no_${req.body.id}`,
-                  label: 'Not Interested 👎',
-                  style: ButtonStyleTypes.DANGER,
-                }
-              ],
-            },
-          ],
-        },
-      });
-    }
-    catch (err)
-    {
-      console.error(err);
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { content: '❌ Something went wrong!' }
-      });
-    }
-  }
-
-    console.error(`unknown command: ${name}`);
-    return res.status(400).json({ error: 'unknown command' });
-  }
-
-  /**
-   * Handle requests from interactive components
-   * See https://discord.com/developers/docs/components/using-message-components#using-message-components-with-interactions
-   */
-  if (type === InteractionType.MESSAGE_COMPONENT) {
-    // custom_id set in payload when sending message component
-    const componentId = data.custom_id;
-
-    if (componentId.startsWith('vote_yes_') || componentId.startsWith('vote_no_')) {
-      const postId = componentId.split('_').pop();
-      const context = req.body.context;
-      const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-      const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
-
-    if (!activeGames[postId]) {
-      activeGames[postId] = { yes: new Set(), no: new Set() };
-    }
-
-  const gameId = getGameIdFromPostId(postId);
-  registerPlayer(userId, userName);
-
-  // remove from both
-  activeGames[postId].yes = new Set();
-  activeGames[postId].no = new Set();
-
-  // add to correct set
-  if (componentId.startsWith('vote_yes_')) {
-    voteForGame(userId, gameId, 1);
-    //activeGames[postId].yes.add(userId);
-  } else {
-    voteForGame(userId, gameId, 0);
-    //activeGames[postId].no.add(userId);
-  }
-
-  // Get votes from db
-  var allGameVotes = getGameVotes(gameId);
-
-  // Update activeGames from db result
-  for (const vote of allGameVotes) {
-    if (vote.vote === 0)
-      activeGames[postId].no.add(userId);
-    else
-      activeGames[postId].yes.add(userId);
-  }
-  // Build result text (using mentions so people see who voted)
-  const yesUsers = [...activeGames[postId].yes].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
-  const noUsers = [...activeGames[postId].no].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
-
-  const results = `✅ Interested: ${yesUsers}\n❌ Not Interested: ${noUsers}`;
-
-  const components = req.body.message.components.map((c, index) => {
-    if (c.type === MessageComponentTypes.TEXT_DISPLAY && index === 2) 
-    {
-      return { ...c, content: results };
-    }
-    return c;
-  });
-
-  // Acknowledge interaction immediately
-  res.send({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE });
-
-  // Patch the message using the bot token (long-lived)
-  const endpoint = `channels/${req.body.channel_id}/messages/${req.body.message.id}`;
-
-  await DiscordRequest(endpoint, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bot ${process.env.DISCORD_TOKEN}`, // use your bot token
-      'Content-Type': 'application/json',
-    },
-    body: {
-      components: components,
-    },
-  });
-
-  /*return res.send({
-    type: InteractionResponseType.UPDATE_MESSAGE,
-    data: { components }
-  });*/
-}
-
-    if (componentId.startsWith('accept_button_')) {
-      // get the associated game ID
-      const gameId = componentId.replace('accept_button_', '');
-      // Delete message with token in request body
-      const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
-      try {
-        await res.send({
+      return {
+        response: {
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
-            // Indicates it'll be an ephemeral message
-            flags: InteractionResponseFlags.EPHEMERAL | InteractionResponseFlags.IS_COMPONENTS_V2,
+            flags: InteractionResponseFlags.IS_COMPONENTS_V2,
             components: [
               {
                 type: MessageComponentTypes.TEXT_DISPLAY,
-                content: 'What is your object of choice?',
+                content: `@here, seems like <@${userId}> wants you to check a game out ! ${url}`,
+              },
+              {
+                type: MessageComponentTypes.MEDIA_GALLERY,
+                items: [
+                  {
+                    media:
+                    {
+                      url: imageUrl
+                    },
+                  }
+                ],
+              },
+              {
+                type: MessageComponentTypes.TEXT_DISPLAY,
+                content: voteContent,
               },
               {
                 type: MessageComponentTypes.ACTION_ROW,
                 components: [
                   {
-                    type: MessageComponentTypes.STRING_SELECT,
-                    // Append game ID
-                    custom_id: `select_choice_${gameId}`,
-                    options: getShuffledOptions(),
+                    type: MessageComponentTypes.BUTTON,
+                    custom_id: `vote_yes_${req.body.id}`,
+                    label: 'Interested 👍',
+                    style: ButtonStyleTypes.SUCCESS,
                   },
+                  {
+                    type: MessageComponentTypes.BUTTON,
+                    custom_id: `vote_no_${req.body.id}`,
+                    label: 'Not Interested 👎',
+                    style: ButtonStyleTypes.DANGER,
+                  }
                 ],
               },
             ],
           },
-        });
-        // Delete previous message
-        await DiscordRequest(endpoint, { method: 'DELETE' });
-      } catch (err) {
-        console.error('Error sending message:', err);
-      }
-    } else if (componentId.startsWith('select_choice_')) {
-      // get the associated game ID
-      const gameId = componentId.replace('select_choice_', '');
-
-      if (activeGames[gameId]) {
-        // Interaction context
-        const context = req.body.context;
-        // Get user ID and object choice for responding user
-        // User ID is in user field for (G)DMs, and member for servers
-        const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-        const objectName = data.values[0];
-        // Calculate result from helper function
-        const resultStr = getResult(activeGames[gameId], {
-          id: userId,
-          objectName,
-        });
-
-        // Remove game from storage
-        delete activeGames[gameId];
-        // Update message with token in request body
-        const endpoint = `webhooks/${process.env.APP_ID}/${req.body.token}/messages/${req.body.message.id}`;
-
-        try {
-          // Send results
-          await res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { 
-              flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-              components: [
-                {
-                  type: MessageComponentTypes.TEXT_DISPLAY,
-                  content: resultStr
-                }
-              ]
-             },
-          });
-          // Update ephemeral message
-          await DiscordRequest(endpoint, {
-            method: 'PATCH',
-            body: {
-              components: [
-                {
-                  type: MessageComponentTypes.TEXT_DISPLAY,
-                  content: 'Nice choice ' + getRandomEmoji()
-                }
-              ],
-            },
-          });
-        } catch (err) {
-          console.error('Error sending message:', err);
-        }
-      }
+        },
+        game_id: gameId
+      };
     }
-    
-    return;
-  }
-
-  console.error('unknown interaction type', type);
-  return res.status(400).json({ error: 'unknown interaction type' });
-});
-
-app.listen(PORT, () => {
-  console.log('Listening on port', PORT);
-});
+    catch (err)
+    {
+      console.error(err);
+      return {
+        response: {
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ Something went wrong!' }
+        },
+        game_id: null
+      };
+    }
+}

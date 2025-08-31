@@ -1,21 +1,5 @@
 import 'dotenv/config';
-import { getRPSChoices } from './game.js';
-import { capitalize, InstallGlobalCommands } from './utils.js';
-
-// Get the game choices from game.js
-function createCommandChoices() {
-  const choices = getRPSChoices();
-  const commandChoices = [];
-
-  for (let choice of choices) {
-    commandChoices.push({
-      name: capitalize(choice),
-      value: choice.toLowerCase(),
-    });
-  }
-
-  return commandChoices;
-}
+import { InstallGlobalCommands, InstallGuildCommands } from './utils.js';
 
 // Command containing options
 const LFG_COMMAND = {
@@ -55,4 +39,5 @@ const LIST_TOP_COMMAND = {
 };
 
 const ALL_COMMANDS = [LFG_COMMAND, LIST_TOP_COMMAND];
+//InstallGuildCommands(process.env.APP_ID, process.env.GUILD_ID, ALL_COMMANDS);
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);

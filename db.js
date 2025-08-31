@@ -15,10 +15,21 @@ db.prepare(`
 db.prepare(`
   CREATE TABLE IF NOT EXISTS games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id TEXT UNIQUE NOT NULL,
     title TEXT UNIQUE NOT NULL,
     url TEXT UNIQUE NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
+
+// Post localization table (to keep track of all posts related to a game)
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS post_loc (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    post_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (game_id) REFERENCES games(id)
   )
 `).run();
 
@@ -69,12 +80,39 @@ export function registerPlayer(userId, username) {
   stmt.run(userId, username);
 }
 
-// Add game
-export function addGame(title, postId, url) {
+// Get all games and votes with interested vs not interested
+export function getListedVotes() {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO games (title, post_id, url) VALUES (?, ?, ?)
+    SELECT 
+      g.id AS game_id,
+      g.title,
+      g.url,
+      COUNT(v.vote) AS total_votes,
+      SUM(CASE WHEN v.vote = 1 THEN 1 ELSE 0 END) AS interested_votes,
+      SUM(CASE WHEN v.vote = 0 THEN 1 ELSE 0 END) AS not_interested_votes
+    FROM games g
+    LEFT JOIN votes v ON g.id = v.game_id
+    GROUP BY g.id
+    ORDER BY interested_votes DESC
   `);
-  stmt.run(title, postId, url);
+
+  return stmt.all();
+}
+
+// Add game
+export function addGame(title, url) {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO games (title, url) VALUES (?, ?)
+  `);
+  stmt.run(title, url);
+}
+
+// Add post (discord message)
+export function addPost(game_id, post_id, channel_id) {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO post_loc (game_id, post_id, channel_id) VALUES (?, ?, ?)
+  `);
+  stmt.run(game_id, post_id, channel_id);
 }
 
 // Count votes for a game
@@ -89,14 +127,44 @@ export function getGameTitle(title) {
   return row ? row.title : null;  // safely handle missing rows
 }
 
-// Count votes for a game
-export function getGameIdFromPostId(postId) {
+// Get a game by ID from its title
+export function getGameIdFromTitle(title) {
   const stmt = db.prepare(`
     SELECT id
     FROM games g
-    WHERE g.post_id = ?
+    WHERE g.title = ?
   `);
-  return stmt.get(postId).id;
+  return stmt.get(title).id;
+}
+
+// Get posts from gameId
+export function getPostsFromGameId(gameId) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM post_loc pl
+    WHERE pl.game_id = ?
+  `);
+  return stmt.all(gameId);
+}
+
+// Get user_id from player_id
+export function getUserIdFromPlayerId(playerId) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM players p
+    WHERE p.id = ?
+  `);
+  return stmt.get(playerId).user_id;
+}
+
+// Get a game by ID from its PostId
+export function getGameIdFromPostId(postId) {
+  const stmt = db.prepare(`
+    SELECT game_id
+    FROM post_loc pl
+    WHERE pl.post_id = ?
+  `);
+  return stmt.get(postId).game_id;
 }
 
 // Record vote
