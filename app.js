@@ -8,7 +8,7 @@ import {
   ButtonStyleTypes,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import { DiscordRequest } from './utils.js';
+import { DiscordRequest, fetchMessage } from './utils.js';
 import { getSteamAppIdFromUrl, getSteamAppNameFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
 import { getListedVotes, getUserIdFromPlayerId, getPostsFromGameId, addPost, getGameIdFromTitle, registerPlayer, addGame, getGameTitle, voteForGame, getGameVoteCount, getGameVotes, createSession, getAllSessions, addPlayerToSession, getPlayersInSession, getGameIdFromPostId} from './db.js';
 
@@ -48,8 +48,62 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   //  1) Create a channel for the session, accessible to everyone who voted with interest
   //  2) Create a discord event and ping it to the channel
   //  3) Create a message where players can click a button to RSVP
+  if (name === 'session')
+  {
 
-  // TODO : see how to keep channels clean. 
+  }
+
+  if (name === 'poll')
+  {
+    // Interaction context
+    const interaction = req.body;
+    const context = req.body.context;
+    const url = req.body.data.options.find(o => o.name === 'game_url').value;
+    const desc = req.body.data.options.find(o => o.name === 'description');
+    const description = desc?.value || null;
+    const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
+
+    const embed = {
+      title: `Poll for ${url}`,
+      description: description || "No description provided",
+      color: 0x5865F2,
+      fields: [
+        { name: "Time Slots", value: "No slots yet", inline: false }
+      ],
+    };
+
+    const components = [
+      {
+        type: 1, // Action Row
+        components: [
+          {
+            type: 2, // Button
+            label: "Add Time Slot",
+            style: 1, // Primary
+            custom_id: "add_time", // used to identify this button
+          },
+        ],
+      },
+    ];
+
+    await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 4, // Channel message with source (sends a message in response)
+        data: {
+          embeds: [embed],
+          components: components, // action rows + buttons
+        },
+      }),
+    });
+  }
+
+
+  // TODO : see how to keep channels clean.
   // Should it be ephemeral ? Should creating the list
   // be a one shot and then refer to the message on command call ?
   // Should the list be paginated ?
@@ -88,7 +142,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     return res.send({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
       data: {
-        embeds: [embed]  // <-- notice the array here
+        embeds: [embed]
       },
     });
   }
@@ -118,10 +172,66 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         data: { content: '❌ Something went wrong!' }
       });
   }
-  }
+}
 
     console.error(`unknown command: ${name}`);
     return res.status(400).json({ error: 'unknown command' });
+  }
+
+  if (type === InteractionType.MODAL_SUBMIT) {
+    const interaction = req.body;
+
+    if (interaction.data.custom_id === 'time_slot_modal') {
+      // Extract user input
+      const timeValue = interaction.data.components[0].components[0].value;
+
+      // Validate the date
+      const date = new Date(timeValue);
+      if (isNaN(date)) {
+        // Send ephemeral message if invalid
+        await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 4, // respond with message
+            data: { content: 'Invalid date format! Use YYYY-MM-DD HH:MM', flags: 64 }, // 64 = ephemeral
+          }),
+        });
+        return;
+      }
+
+      // Fetch original message (pseudo-function, implement your own)
+      const message = await fetchMessage(interaction.channel_id, interaction.message.id);
+
+      // Update embed
+      const embed = message.embeds[0];
+      let slotsField = embed.fields.find(f => f.name === 'Time Slots');
+      if (!slotsField) {
+        embed.fields.push({ name: 'Time Slots', value: `• ${timeValue}`, inline: false });
+      } else {
+        slotsField.value += `\n• ${timeValue}`;
+      }
+
+      // Edit message via API
+      await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages/${interaction.message.id}`, {
+        method: 'PATCH',
+        headers: { 
+          'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ embeds: [embed] }),
+      });
+
+      // Acknowledge the modal submission
+      await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 4,
+          data: { content: 'Time slot added!', flags: 64 },
+        }),
+      });
+    }
   }
 
   /**
@@ -131,6 +241,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   if (type === InteractionType.MESSAGE_COMPONENT) {
     // custom_id set in payload when sending message component
     const componentId = data.custom_id;
+    const interaction = req.body;
     const postId = req.body.message.id;
 
     if (componentId.startsWith('vote_yes_') || componentId.startsWith('vote_no_')) {
@@ -138,33 +249,33 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
       const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
 
-    const gameId = getGameIdFromPostId(postId);
-    registerPlayer(userId, userName);
+      const gameId = getGameIdFromPostId(postId);
+      registerPlayer(userId, userName);
 
-    // initialize vote store
-    var voteSet = 
-    { 
-      yes: new Set(), 
-      no: new Set() 
-    };
+      // initialize vote store
+      var voteSet = 
+      { 
+        yes: new Set(), 
+        no: new Set() 
+      };
 
-    // add to correct set
-    if (componentId.startsWith('vote_yes_')) {
-      voteForGame(userId, gameId, 1);
-    } else {
-      voteForGame(userId, gameId, 0);
-    }
+      // add to correct set
+      if (componentId.startsWith('vote_yes_')) {
+        voteForGame(userId, gameId, 1);
+      } else {
+        voteForGame(userId, gameId, 0);
+      }
 
-    // Get votes from db
-    var allGameVotes = getGameVotes(gameId);
+      // Get votes from db
+      var allGameVotes = getGameVotes(gameId);
 
-    // Update activeGames from db result
-    for (const vote of allGameVotes) {
-      if (vote.vote === 0)
-        voteSet.no.add(getUserIdFromPlayerId(vote.player_id));
-      else
-        voteSet.yes.add(getUserIdFromPlayerId(vote.player_id));
-    }
+      // Update activeGames from db result
+      for (const vote of allGameVotes) {
+        if (vote.vote === 0)
+          voteSet.no.add(getUserIdFromPlayerId(vote.player_id));
+        else
+          voteSet.yes.add(getUserIdFromPlayerId(vote.player_id));
+      }
     // Build result text (using mentions so people see who voted)
     const yesUsers = [...voteSet.yes].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
     const noUsers = [...voteSet.no].map(id => `<@${id}>`).join(', ') || 'Nobody yet';
@@ -211,6 +322,38 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       }
     }
   }
+
+    // Handle button press
+    if (componentId.startsWith('add_time')) {
+      // Respond with a modal
+      const modalPayload = {
+        type: 9, // Modal
+        data: {
+          custom_id: 'time_slot_modal',
+          title: 'Add a Time Slot',
+          components: [
+            {
+              type: 1, // Action row
+              components: [
+                {
+                  type: 4, // Text input
+                  custom_id: 'time_slot',
+                  style: 1, // Short text
+                  label: 'Enter date & time (YYYY-MM-DD HH:MM)',
+                  required: true,
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+      await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(modalPayload),
+      });
+    }
 
   return;
 }

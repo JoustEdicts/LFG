@@ -36,6 +36,19 @@ export async function InstallGlobalCommands(appId, commands) {
   }
 }
 
+export async function fetchMessage(channelId, messageId) {
+  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!res.ok) throw new Error(`Failed to fetch message: ${res.status}`);
+  return await res.json(); // returns the message object
+}
+
 export async function InstallGuildCommands(appId, guildId, commands) {
   // API endpoint to overwrite guild commands
   const endpoint = `applications/${appId}/guilds/${guildId}/commands`;
