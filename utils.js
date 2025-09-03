@@ -49,6 +49,18 @@ export async function fetchMessage(channelId, messageId) {
   return await res.json(); // returns the message object
 }
 
+export function formatDateTime(date) {
+  const pad = (n) => n.toString().padStart(2, '0');
+  return (
+    date.getFullYear() + '-' +
+    pad(date.getMonth() + 1) + '-' +
+    pad(date.getDate()) + ' ' +
+    pad(date.getHours()) + ':' +
+    pad(date.getMinutes()) + ':' +
+    pad(date.getSeconds())
+  );
+}
+
 export function customDateFormat(date) {
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

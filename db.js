@@ -8,6 +8,13 @@ export const PostType = {
   POLL: 2,
 };
 
+export const PollVotes = {
+  No: -1,
+  Maybe: 0,
+  Yes: 1,
+};
+
+
 // Players table
 db.prepare(`
   CREATE TABLE IF NOT EXISTS players (
@@ -59,6 +66,7 @@ db.prepare(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL,
     creator_id INTEGER NOT NULL,
+    post_id TEXT NOT NULL,
     description TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (game_id) REFERENCES games(id),
@@ -71,7 +79,8 @@ db.prepare(`
   CREATE TABLE IF NOT EXISTS poll_timeslots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     poll_id INTEGER NOT NULL,
-    start_time DATETIME NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (poll_id) REFERENCES polls(id)
     );
@@ -85,7 +94,7 @@ db.prepare(`
     vote INTEGER NOT NULL, -- 1=yes, 0=maybe, -1=no
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (timeslot_id, player_id),
-    FOREIGN KEY (timeslot_id) REFERENCES timeslots(id),
+    FOREIGN KEY (timeslot_id) REFERENCES poll_timeslots(id),
     FOREIGN KEY (player_id) REFERENCES players(id)
     );
 `).run();
@@ -142,23 +151,33 @@ export function getListedVotes() {
 }
 
 // Add a new poll
-export function addPoll(gameId, creatorId, description = null) {
+export function addPoll(gameId, creatorId, description = null, postId) {
   const stmt = db.prepare(`
-    INSERT INTO polls (game_id, creator_id, description)
-    VALUES (?, ?, ?)
+    INSERT INTO polls (game_id, creator_id, description, post_id)
+    VALUES (?, ?, ?, ?)
   `);
-  const info = stmt.run(gameId, creatorId, description);
+  const info = stmt.run(gameId, creatorId, description, postId);
   return info.lastInsertRowid; // return the poll id
 }
 
 // Add a time slot to a poll
 export function addTimeSlot(pollId, startTime, endTime) {
   const stmt = db.prepare(`
-    INSERT INTO timeslots (poll_id, time_from, time_to)
+    INSERT INTO poll_timeslots (poll_id, start_time, end_time)
     VALUES (?, ?, ?)
   `);
   const info = stmt.run(pollId, startTime, endTime);
   return info.lastInsertRowid; // return the timeslot id
+}
+
+// Get all time slots from a poll
+export function getAllTimeslots(pollId) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM poll_timeslots pt
+    WHERE pt.poll_id = ?
+  `);
+  return stmt.all(pollId);
 }
 
 // Save or update a user's vote for a specific timeslot
@@ -168,7 +187,8 @@ export function setPollVote(timeslotId, playerId, vote) {
     VALUES (?, ?, ?)
     ON CONFLICT(timeslot_id, player_id) DO UPDATE SET vote=excluded.vote, created_at=CURRENT_TIMESTAMP
   `);
-  stmt.run(timeslotId, playerId, vote); 
+  const info = stmt.run(timeslotId, playerId, vote);
+  return info.lastInsertRowid; // return the poll_vote id
 }
 
 // Add game
@@ -197,6 +217,16 @@ export function getGameTitle(title) {
   
   const row = stmt.get(title);
   return row ? row.title : null;  // safely handle missing rows
+}
+
+// Get a poll id from its post id
+export function getPollIdFromPostId(postId) {
+  const stmt = db.prepare(`
+    SELECT id
+    FROM polls p
+    WHERE p.post_id = ?
+  `);
+  return stmt.get(postId).id;
 }
 
 // Get a game by ID from its title

@@ -8,10 +8,11 @@ import {
   ButtonStyleTypes,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import { DiscordRequest, fetchMessage, customDateFormat } from './utils.js';
+import { DiscordRequest, fetchMessage, customDateFormat, formatDateTime } from './utils.js';
 import { getSteamAppIdFromUrl, getSteamAppNameFromUrl, getSteamHeaderImage, extractYouTubeId, getYouTubeThumbnail } from './game.js';
 import { 
   PostType,
+  PollVotes,
   addPoll, 
   addTimeSlot, 
   setPollVote, 
@@ -31,8 +32,13 @@ import {
   addPlayerToSession, 
   getPlayersInSession, 
   getGameIdFromPostId,
-  getPlayerIdFromUserId
+  getPlayerIdFromUserId,
+  getPollIdFromPostId,
+  getAllTimeslots
 } from './db.js';
+
+// TODOS
+// Update poll message on user votes (it is already saved in db !)
 
 // Create an express app
 const app = express();
@@ -102,7 +108,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     const messageData = await messageRes.json();
 
     addPost(game_id, messageData.id, messageData.channel_id, PostType.POLL);
-    addPoll(game_id, getPlayerIdFromUserId(user_id), description);
+    addPoll(game_id, getPlayerIdFromUserId(user_id), description, messageData.id);
   }
 
   // TODO : see how to keep channels clean.
@@ -183,7 +189,10 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   }
 
   if (type === InteractionType.MODAL_SUBMIT) {
+    // custom_id set in payload when sending message component
+    const componentId = data.custom_id;
     const interaction = req.body;
+    const postId = req.body.message.id;
 
     if (interaction.data.custom_id === 'time_slot_modal') {
       // Extract user input
@@ -206,7 +215,11 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         return;
       }
 
+      // get poll_id from post_id
+      const pollId = getPollIdFromPostId(postId);
 
+      // Populate timeslot table in db
+      addTimeSlot(pollId, formatDateTime(startDate), formatDateTime(endDate));
 
       // Fetch original message
       const message = await fetchMessage(interaction.channel_id, interaction.message.id);
@@ -214,12 +227,21 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       // Update embed
       const embed = message.embeds[0];
       let slotsField = embed.fields.find(f => f.name === 'Time Slots');
-      if (!slotsField) {
-        embed.fields.push({ name: 'Time Slots', value: `• ${customDateFormat(startDate)} - ${customDateFormat(endDate)}`, inline: false });
-      } else {
-        slotsField.value += `\n• ${customDateFormat(startDate)} - ${customDateFormat(endDate)}`;
-      }
 
+      const newSlot = `• ${customDateFormat(startDate)} - ${customDateFormat(endDate)}`;
+
+      if (!slotsField) {
+        // Create the field if it doesn't exist
+        embed.fields.push({ name: 'Time Slots', value: newSlot, inline: false });
+      } else {
+        // If the current value is the placeholder, replace it
+        if (slotsField.value === "No slots yet") {
+          slotsField.value = newSlot;
+        } else {
+          // Otherwise, append
+          slotsField.value += `\n${newSlot}`;
+        }
+      }
       // Edit message via API
       await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages/${interaction.message.id}`, {
         method: 'PATCH',
@@ -227,7 +249,9 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
           'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ embeds: [embed] }),
+        body: JSON.stringify({ 
+          embeds: [embed]
+        }),
       });
 
       // Acknowledge the modal submission
@@ -251,11 +275,11 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     const componentId = data.custom_id;
     const interaction = req.body;
     const postId = req.body.message.id;
+    const context = req.body.context;
+    const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
+    const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
 
     if (componentId.startsWith('vote_yes_') || componentId.startsWith('vote_no_')) {
-      const context = req.body.context;
-      const userId = context === 0 ? req.body.member.user.id : req.body.user.id;
-      const userName = context === 0 ? req.body.member.user.global_name : req.body.user.global_name;
 
       const gameId = getGameIdFromPostId(postId, PostType.LFG);
       registerPlayer(userId, userName);
@@ -329,6 +353,76 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         }
       }
     }
+  }
+
+  if (componentId.startsWith('RSVP')) {
+    const pollId = getPollIdFromPostId(postId);
+    const timeslots = getAllTimeslots(pollId);
+    const components = [];
+
+    for (const t of timeslots) {
+      const timeslotLabel = `• ${customDateFormat(new Date(t.start_time.replace(" ", "T")))} - ${customDateFormat(new Date(t.end_time.replace(" ", "T")))}`;
+
+      components.push(
+        {
+          type: MessageComponentTypes.TEXT_DISPLAY,
+          content: timeslotLabel,
+        },
+        {
+          type: MessageComponentTypes.ACTION_ROW,
+          components: [
+            { type: MessageComponentTypes.BUTTON, custom_id: `poll_vote_yes_${t.id}`, label: "Yes", style: ButtonStyleTypes.SUCCESS },
+            { type: MessageComponentTypes.BUTTON, custom_id: `poll_vote_maybe_${t.id}`, label: "Maybe", style: ButtonStyleTypes.PRIMARY },
+            { type: MessageComponentTypes.BUTTON, custom_id: `poll_vote_no_${t.id}`, label: "No", style: ButtonStyleTypes.DANGER },
+          ],
+        }
+      );
+    }
+
+    await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "", // content can be empty in V2
+          components: components,
+          flags: InteractionResponseFlags.IS_COMPONENTS_V2 | 64, // V2 + ephemeral
+        },
+      }),
+    });
+  }
+
+  // Interaction handler
+  if (componentId.startsWith('poll_vote_')) {
+    // Example custom_id: "poll_vote_yes_12"
+    const [_, __, voteType, timeslotId] = componentId.split('_'); // ["poll","vote","yes","12"]
+    
+    var vote = null;
+    // Save to your database
+    if (voteType === 'yes')
+      vote = PollVotes.Yes;
+    else if (voteType === 'maybe')
+      vote = PollVotes.Maybe;
+    else
+      vote = PollVotes.No;
+
+    setPollVote(timeslotId, getPlayerIdFromUserId(userId), vote)
+
+    // Optionally, acknowledge the interaction to avoid "interaction failed"
+    await fetch(`https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 6, // Update message, acknowledges the button press
+      }),
+    });
   }
 
     // Handle button press
@@ -629,7 +723,13 @@ async function buildPollMessage(id, req)
             type: 2, // Button
             label: "Add Time Slot",
             style: 1, // Primary
-            custom_id: "add_time", // used to identify this button
+            custom_id: `add_time_${req.body.id}`, // used to identify this button
+          },
+          {
+            type: 2, // Button
+            label: "RSVP",
+            style: 2, // Secondary
+            custom_id: `RSVP_${req.body.id}`, // used to identify this button
           },
         ],
       },
