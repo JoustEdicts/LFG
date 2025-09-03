@@ -49,6 +49,19 @@ export async function fetchMessage(channelId, messageId) {
   return await res.json(); // returns the message object
 }
 
+export function customDateFormat(date) {
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const d = days[date.getDay()];
+  const m = months[date.getMonth()];
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+
+  return `${d} ${m} ${day} ${hour}h${min}`;
+}
+
 export async function InstallGuildCommands(appId, guildId, commands) {
   // API endpoint to overwrite guild commands
   const endpoint = `applications/${appId}/guilds/${guildId}/commands`;

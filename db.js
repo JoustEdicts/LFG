@@ -2,6 +2,12 @@ import Database from "better-sqlite3";
 
 const db = new Database("bot.db");
 
+export const PostType = {
+  LFG: 0,
+  LIST: 1,
+  POLL: 2,
+};
+
 // Players table
 db.prepare(`
   CREATE TABLE IF NOT EXISTS players (
@@ -27,6 +33,7 @@ db.prepare(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id INTEGER NOT NULL,
     post_id TEXT NOT NULL,
+    post_type INTEGER NOT NULL,
     channel_id TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (game_id) REFERENCES games(id)
@@ -43,7 +50,44 @@ db.prepare(`
     PRIMARY KEY (player_id, game_id),
     FOREIGN KEY (player_id) REFERENCES players(id),
     FOREIGN KEY (game_id) REFERENCES games(id)
-  )
+    );
+`).run();
+
+// Poll table (many-to-many)
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS polls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    creator_id INTEGER NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (game_id) REFERENCES games(id),
+    FOREIGN KEY (creator_id) REFERENCES players(id)
+    );
+`).run();
+
+// Timeslots table (many-to-many)
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS poll_timeslots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    poll_id INTEGER NOT NULL,
+    start_time DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (poll_id) REFERENCES polls(id)
+    );
+`).run();
+
+// Poll votes table (many-to-many)
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS poll_votes (
+    timeslot_id INTEGER NOT NULL,
+    player_id INTEGER NOT NULL,
+    vote INTEGER NOT NULL, -- 1=yes, 0=maybe, -1=no
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (timeslot_id, player_id),
+    FOREIGN KEY (timeslot_id) REFERENCES timeslots(id),
+    FOREIGN KEY (player_id) REFERENCES players(id)
+    );
 `).run();
 
 // Sessions table
@@ -69,8 +113,6 @@ db.prepare(`
         FOREIGN KEY (player_id) REFERENCES players(id)
     );
 `).run();
-
-// === Commands ===
 
 // Register player
 export function registerPlayer(userId, username) {
@@ -99,6 +141,36 @@ export function getListedVotes() {
   return stmt.all();
 }
 
+// Add a new poll
+export function addPoll(gameId, creatorId, description = null) {
+  const stmt = db.prepare(`
+    INSERT INTO polls (game_id, creator_id, description)
+    VALUES (?, ?, ?)
+  `);
+  const info = stmt.run(gameId, creatorId, description);
+  return info.lastInsertRowid; // return the poll id
+}
+
+// Add a time slot to a poll
+export function addTimeSlot(pollId, startTime, endTime) {
+  const stmt = db.prepare(`
+    INSERT INTO timeslots (poll_id, time_from, time_to)
+    VALUES (?, ?, ?)
+  `);
+  const info = stmt.run(pollId, startTime, endTime);
+  return info.lastInsertRowid; // return the timeslot id
+}
+
+// Save or update a user's vote for a specific timeslot
+export function setPollVote(timeslotId, playerId, vote) {
+  const stmt = db.prepare(`
+    INSERT INTO poll_votes (timeslot_id, player_id, vote)
+    VALUES (?, ?, ?)
+    ON CONFLICT(timeslot_id, player_id) DO UPDATE SET vote=excluded.vote, created_at=CURRENT_TIMESTAMP
+  `);
+  stmt.run(timeslotId, playerId, vote); 
+}
+
 // Add game
 export function addGame(title, url) {
   const stmt = db.prepare(`
@@ -108,11 +180,11 @@ export function addGame(title, url) {
 }
 
 // Add post (discord message)
-export function addPost(game_id, post_id, channel_id) {
+export function addPost(game_id, post_id, channel_id, post_type) {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO post_loc (game_id, post_id, channel_id) VALUES (?, ?, ?)
+    INSERT OR IGNORE INTO post_loc (game_id, post_id, channel_id, post_type) VALUES (?, ?, ?, ?)
   `);
-  stmt.run(game_id, post_id, channel_id);
+  stmt.run(game_id, post_id, channel_id, post_type);
 }
 
 // Count votes for a game
@@ -138,13 +210,14 @@ export function getGameIdFromTitle(title) {
 }
 
 // Get posts from gameId
-export function getPostsFromGameId(gameId) {
+export function getPostsFromGameId(gameId, postType) {
   const stmt = db.prepare(`
     SELECT *
     FROM post_loc pl
     WHERE pl.game_id = ?
+    AND pl.post_type = ?
   `);
-  return stmt.all(gameId);
+  return stmt.all(gameId, postType);
 }
 
 // Get user_id from player_id
@@ -157,14 +230,25 @@ export function getUserIdFromPlayerId(playerId) {
   return stmt.get(playerId).user_id;
 }
 
+// Get user_id from player_id
+export function getPlayerIdFromUserId(userId) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM players p
+    WHERE p.user_id = ?
+  `);
+  return stmt.get(userId).id;
+}
+
 // Get a game by ID from its PostId
-export function getGameIdFromPostId(postId) {
+export function getGameIdFromPostId(postId, postType) {
   const stmt = db.prepare(`
     SELECT game_id
     FROM post_loc pl
     WHERE pl.post_id = ?
+    AND pl.post_type = ?
   `);
-  return stmt.get(postId).game_id;
+  return stmt.get(postId, postType).game_id;
 }
 
 // Record vote

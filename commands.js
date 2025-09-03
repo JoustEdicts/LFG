@@ -89,5 +89,5 @@ const SESSION_COMMAND = {
 };
 
 const ALL_COMMANDS = [LFG_COMMAND, LIST_TOP_COMMAND, SESSION_COMMAND, SESSION_POLL_COMMAND];
-InstallGuildCommands(process.env.APP_ID, process.env.GUILD_ID, ALL_COMMANDS);
-//InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
+//InstallGuildCommands(process.env.APP_ID, process.env.GUILD_ID, ALL_COMMANDS);
+InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
